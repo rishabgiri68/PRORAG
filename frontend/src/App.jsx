@@ -382,9 +382,14 @@ function CitedText({ text, c, onCite }) {
 ———————————————————————————————————————————————————————————————— */
 
 function DocumentsSidebar({ c, selected, setSelected, collapsed }) {
-  const [filter, setFilter] = useState("All Documents");
-  const filters = ["All Documents", "Research Papers", "Reports", "Books"];
-  const filtered = DOCS.filter((d) => filter === "All Documents" || d.collection === filter);
+  const [documents, setDocuments] = useState([]);
+
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/documents")
+      .then((res) => res.json())
+      .then((data) => setDocuments(data.documents || []))
+      .catch(console.error);
+  }, []);
 
   if (collapsed) return null;
 
@@ -394,159 +399,377 @@ function DocumentsSidebar({ c, selected, setSelected, collapsed }) {
       style={{ borderColor: c.rule, background: c.panel }}
     >
       <div className="p-3 border-b" style={{ borderColor: c.rule }}>
-        <button
-          className="w-full flex items-center justify-center gap-1.5 text-[13px] py-2 rounded-sm"
-          style={{ background: c.accent, color: "#fff" }}
-        >
-          <Plus size={14} /> Upload Documents
-        </button>
+        <div className="text-[12px]" style={{ color: c.inkFaint }}>
+          {documents.length} Documents
+        </div>
       </div>
-      <div className="px-3 pt-3 flex flex-wrap gap-1.5">
-        {filters.map((f) => (
-          <Pill key={f} c={c} active={filter === f} onClick={() => setFilter(f)}>
-            {f}
-          </Pill>
-        ))}
-      </div>
+
       <div className="flex-1 overflow-y-auto p-3 space-y-1">
-        <div className="text-[10.5px] uppercase tracking-wide mb-1.5 mt-1" style={{ color: c.inkFaint }}>
+        <div
+          className="text-[10.5px] uppercase tracking-wide mb-2"
+          style={{ color: c.inkFaint }}
+        >
           Recent
         </div>
-        {filtered.map((d) => (
+
+        {documents.map((d) => (
           <button
-            key={d.id}
-            onClick={() => setSelected(d.id)}
-            className="w-full text-left px-2.5 py-2 rounded-sm flex items-start gap-2"
-            style={{ background: selected === d.id ? c.accentSoft : "transparent" }}
+            key={d.name}
+            onClick={() => setSelected(d.name)}
+            className="w-full text-left px-2 py-2 rounded-sm text-[12.5px]"
+            style={{
+              background: selected === d.name ? c.accentSoft : "transparent",
+              color: c.ink,
+            }}
           >
-            <FileText size={14} className="mt-0.5 shrink-0" style={{ color: selected === d.id ? c.accentText : c.inkFaint }} />
-            <div className="min-w-0">
-              <div
-                className="text-[13px] leading-tight truncate"
-                style={{ color: selected === d.id ? c.accentText : c.ink }}
-              >
-                {d.name}
-              </div>
-              <div className="text-[11px] mt-0.5" style={{ color: c.inkFaint }}>
-                {d.type} · {d.date}
-              </div>
-            </div>
+            <FileText size={13} className="inline mr-2" />
+            {d.name}
           </button>
         ))}
       </div>
     </aside>
   );
 }
-
-function AnswerBlock({ c, msg, onCite }) {
-  return (
-    <div className="max-w-2xl">
-      <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: c.inkFaint }}>
-        Answer
-      </div>
-      <p className="text-[15.5px] leading-relaxed mb-4" style={{ ...serif, color: c.ink }}>
-        <CitedText text={msg.answer} c={c} onCite={onCite} />
-      </p>
-
-      <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: c.inkFaint }}>
-        Key findings
-      </div>
-      <div className="space-y-2.5 mb-5">
-        {msg.findings.map((f, i) => (
-          <div key={i} className="flex gap-3">
-            <span className="text-[12px] mt-0.5 tabular-nums" style={{ color: c.inkFaint }}>
-              {String(i + 1).padStart(2, "0")}
-            </span>
-            <p className="text-[14px] leading-relaxed" style={{ color: c.inkSoft }}>
-              <CitedText text={f} c={c} onCite={onCite} />
-            </p>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex items-center gap-4 text-[11.5px]" style={{ color: c.inkFaint }}>
-        <span>Confidence {(msg.confidence * 100).toFixed(0)}%</span>
-        <span>·</span>
-        <span>{msg.latency}</span>
-        <span>·</span>
-        <button className="flex items-center gap-1 hover:underline">
-          <Bookmark size={11} /> Save to Notes
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ResearchPanel({ c, onCite, activeDoc }) {
+function ResearchPanel({
+  c,
+  onCite,
+  activeDoc,
+  ragResult,
+  setRagResult,
+}) {
   const [value, setValue] = useState("");
+  const [question, setQuestion] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
   const examples = [
-    "Summarize the methodology used in this paper.",
+    "What is Retrieval-Augmented Generation?",
     "What are the main findings?",
-    "What limitations do the authors identify?",
+    "What limitations are discussed?",
   ];
 
+  // Send the user's question to our FastAPI RAG backend
+  const askQuestion = async () => {
+    const query = value.trim();
+
+    if (!query || loading) return;
+
+    setLoading(true);
+    setError("");
+    setQuestion(query);
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/ask", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: query,
+          k: 3,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Request failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      // Store the complete RAG response in ResearchWorkspace
+      // so both the answer panel and sources panel can use it.
+      setRagResult(data);
+
+      setValue("");
+    } catch (err) {
+      console.error("RAG request failed:", err);
+
+      setError(
+        "Could not connect to the ProRAG backend. Make sure FastAPI and OmniRoute are running."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Allow Enter key to submit the question
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      askQuestion();
+    }
+  };
+
+  // Clear current research session
+  const newSession = () => {
+    setValue("");
+    setQuestion("");
+    setError("");
+    setRagResult(null);
+  };
+
   return (
-    <section className="flex-1 min-w-0 flex flex-col" style={{ background: c.bg }}>
+    <section
+      className="flex-1 min-w-0 flex flex-col"
+      style={{ background: c.bg }}
+    >
+      {/* Header */}
       <div
         className="px-6 py-3.5 border-b flex items-center justify-between"
         style={{ borderColor: c.rule }}
       >
         <div>
-          <div className="text-[13.5px] font-medium" style={{ color: c.ink }}>
+          <div
+            className="text-[13.5px] font-medium"
+            style={{ color: c.ink }}
+          >
             AI Research Assistant
           </div>
-          <div className="text-[11.5px]" style={{ color: c.inkFaint }}>
-            {activeDoc ? `Scoped to ${activeDoc.name}` : "Searching your entire library"}
+
+          <div
+            className="text-[11.5px]"
+            style={{ color: c.inkFaint }}
+          >
+            {activeDoc
+              ? `Scoped to ${activeDoc.name}`
+              : "Searching your entire library"}
           </div>
         </div>
-        <button className="text-[12px] flex items-center gap-1" style={{ color: c.inkSoft }}>
+
+        <button
+          onClick={newSession}
+          className="text-[12px] flex items-center gap-1"
+          style={{ color: c.inkSoft }}
+        >
           New session
         </button>
       </div>
 
+      {/* Research conversation */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-8">
-        <div>
-          <div className="text-[11px] uppercase tracking-wide mb-2" style={{ color: c.inkFaint }}>
-            Question
+
+        {/* Question */}
+        {question && (
+          <div>
+            <div
+              className="text-[11px] uppercase tracking-wide mb-2"
+              style={{ color: c.inkFaint }}
+            >
+              Question
+            </div>
+
+            <p
+              className="text-[15px] max-w-2xl"
+              style={{
+                ...serif,
+                color: c.ink,
+              }}
+            >
+              {question}
+            </p>
           </div>
-          <p className="text-[15px] max-w-2xl" style={{ ...serif, color: c.ink }}>
-            {CHAT_DEMO[0].text}
-          </p>
-        </div>
-        <AnswerBlock c={c} msg={CHAT_DEMO[1]} onCite={onCite} />
+        )}
+
+        {/* Loading */}
+        {loading && (
+          <div className="max-w-2xl">
+            <div
+              className="text-[11px] uppercase tracking-wide mb-2"
+              style={{ color: c.inkFaint }}
+            >
+              Atlas is researching
+            </div>
+
+            <div
+              className="flex items-center gap-2 text-[13.5px]"
+              style={{ color: c.inkSoft }}
+            >
+              <Sparkles size={14} />
+
+              <span>
+                Searching your documents and generating a grounded answer...
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div
+            className="max-w-2xl rounded-sm border p-3"
+            style={{
+              borderColor: c.danger,
+              background: c.panel,
+            }}
+          >
+            <div
+              className="text-[13px]"
+              style={{ color: c.danger }}
+            >
+              {error}
+            </div>
+          </div>
+        )}
+
+        {/* REAL RAG answer */}
+        {ragResult && !loading && (
+          <div className="max-w-2xl">
+
+            <div
+              className="text-[11px] uppercase tracking-wide mb-2"
+              style={{ color: c.inkFaint }}
+            >
+              Answer
+            </div>
+
+            <p
+              className="text-[15.5px] leading-relaxed mb-5 whitespace-pre-wrap"
+              style={{
+                ...serif,
+                color: c.ink,
+              }}
+            >
+              {ragResult.answer}
+            </p>
+
+            {/* Answer metadata */}
+            <div
+              className="flex flex-wrap items-center gap-3 text-[11.5px]"
+              style={{ color: c.inkFaint }}
+            >
+              <span>
+                {ragResult.sources?.length || 0} retrieved sources
+              </span>
+
+              <span>·</span>
+
+              <span>FAISS retrieval</span>
+
+              <span>·</span>
+
+              <span>Grounded generation</span>
+
+              <button
+                className="flex items-center gap-1 ml-1 hover:underline"
+                style={{ color: c.inkFaint }}
+              >
+                <Bookmark size={11} />
+                Save to Notes
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Initial empty state */}
+        {!question && !ragResult && !loading && (
+          <div className="max-w-xl py-8">
+            <Sparkles
+              size={20}
+              className="mb-4"
+              style={{ color: c.accent }}
+            />
+
+            <h2
+              className="text-[22px] mb-2"
+              style={{
+                ...serif,
+                color: c.ink,
+              }}
+            >
+              Ask your research library
+            </h2>
+
+            <p
+              className="text-[13.5px] leading-relaxed"
+              style={{ color: c.inkSoft }}
+            >
+              Ask a question about your indexed documents. Atlas will retrieve
+              relevant passages and use them as evidence when generating the
+              answer.
+            </p>
+          </div>
+        )}
       </div>
 
-      <div className="p-4 border-t" style={{ borderColor: c.rule }}>
+      {/* Question input */}
+      <div
+        className="p-4 border-t"
+        style={{ borderColor: c.rule }}
+      >
+
+        {/* Example questions */}
         <div className="flex flex-wrap gap-1.5 mb-2.5">
-          {examples.map((e) => (
+          {examples.map((example) => (
             <button
-              key={e}
-              onClick={() => setValue(e)}
+              key={example}
+              onClick={() => setValue(example)}
+              disabled={loading}
               className="text-[11.5px] px-2 py-1 rounded-full border"
-              style={{ borderColor: c.rule, color: c.inkSoft }}
+              style={{
+                borderColor: c.rule,
+                color: c.inkSoft,
+              }}
             >
-              {e}
+              {example}
             </button>
           ))}
         </div>
+
+        {/* Input box */}
         <div
           className="flex items-center gap-2 rounded-sm border px-3 py-2"
-          style={{ borderColor: c.ruleStrong, background: c.panel }}
+          style={{
+            borderColor: c.ruleStrong,
+            background: c.panel,
+          }}
         >
           <input
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            placeholder="Ask a question about your documents…"
+            onKeyDown={handleKeyDown}
+            disabled={loading}
+            placeholder={
+              loading
+                ? "Atlas is researching..."
+                : "Ask a question about your documents…"
+            }
             className="flex-1 bg-transparent outline-none text-[14px]"
             style={{ color: c.ink }}
           />
-          <button aria-label="Voice input" style={{ color: c.inkFaint }}>
+
+          {/* Voice — UI only for now */}
+          <button
+            aria-label="Voice input"
+            disabled={loading}
+            style={{ color: c.inkFaint }}
+          >
             <Mic size={16} />
           </button>
+
+          {/* Send */}
           <button
+            onClick={askQuestion}
+            disabled={loading || !value.trim()}
             aria-label="Send question"
-            className="w-7 h-7 rounded-sm flex items-center justify-center"
-            style={{ background: c.accent, color: "#fff" }}
+            className="w-7 h-7 rounded-sm flex items-center justify-center transition-opacity"
+            style={{
+              background:
+                loading || !value.trim()
+                  ? c.ruleStrong
+                  : c.accent,
+
+              color: "#fff",
+
+              cursor:
+                loading || !value.trim()
+                  ? "not-allowed"
+                  : "pointer",
+
+              opacity:
+                loading || !value.trim()
+                  ? 0.6
+                  : 1,
+            }}
           >
             <Send size={13} />
           </button>
@@ -556,130 +779,129 @@ function ResearchPanel({ c, onCite, activeDoc }) {
   );
 }
 
-function SourcesPanel({ c, activeCitation, setActiveCitation, showInspector, setShowInspector, inspectorView, setInspectorView }) {
+function SourcesPanel({
+  c,
+  sources = [],
+  activeCitation,
+  setActiveCitation,
+}) {
   return (
     <aside
       className="w-full md:w-[300px] shrink-0 border-l flex flex-col"
-      style={{ borderColor: c.rule, background: c.panel }}
+      style={{
+        borderColor: c.rule,
+        background: c.panel,
+      }}
     >
-      <div className="px-4 py-3.5 border-b flex items-center justify-between" style={{ borderColor: c.rule }}>
-        <span className="text-[13.5px] font-medium" style={{ color: c.ink }}>Sources</span>
-        <button
-          onClick={() => setShowInspector((s) => !s)}
-          className="text-[11.5px] flex items-center gap-1"
-          style={{ color: c.inkSoft }}
+      {/* Header */}
+      <div
+        className="px-4 py-3.5 border-b"
+        style={{ borderColor: c.rule }}
+      >
+        <span
+          className="text-[13.5px] font-medium"
+          style={{ color: c.ink }}
         >
-          <SlidersHorizontal size={12} /> Inspector
-        </button>
+          Sources
+        </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
-        {SOURCES.map((s) => (
-          <button
-            key={s.n}
-            onClick={() => setActiveCitation(s.n)}
-            className="w-full text-left rounded-sm border p-3 transition-colors"
-            style={{
-              borderColor: activeCitation === s.n ? c.accent : c.rule,
-              background: activeCitation === s.n ? c.accentSoft : "transparent",
-            }}
-          >
-            <div className="flex items-center justify-between mb-1.5">
-              <span
-                className="text-[11px] w-5 h-5 rounded-full flex items-center justify-center"
-                style={{ background: c.citationBg, color: c.citation }}
-              >
-                {s.n}
-              </span>
-              <span className="text-[11px] tabular-nums" style={{ color: c.inkFaint }}>
-                {(s.similarity * 100).toFixed(0)}% match
-              </span>
-            </div>
-            <div className="text-[13px] leading-snug mb-1" style={{ color: c.ink }}>
-              {s.doc}
-            </div>
-            <div className="text-[11px] mb-2" style={{ color: c.inkFaint }}>
-              Page {s.page} · Chunk {s.chunk}
-            </div>
-            {activeCitation === s.n && (
-              <p className="text-[12.5px] leading-relaxed pt-2 border-t" style={{ ...serif, color: c.inkSoft, borderColor: c.rule }}>
-                "{s.passage}"
-              </p>
-            )}
-            <ScoreBar value={s.similarity} c={c} />
-            {activeCitation === s.n && (
-              <div className="flex items-center gap-3 mt-2.5 text-[11px]" style={{ color: c.inkFaint }}>
-                <span className="flex items-center gap-1"><ExternalLink size={11} /> Open document</span>
-                <span className="flex items-center gap-1"><Copy size={11} /> Copy citation</span>
-              </div>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {showInspector && (
-        <div className="border-t p-3.5" style={{ borderColor: c.rule }}>
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="text-[12.5px] font-medium" style={{ color: c.ink }}>Retrieval Inspector</span>
-            <div className="flex text-[10.5px] rounded-full overflow-hidden border" style={{ borderColor: c.rule }}>
-              {["Simple", "Technical"].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => setInspectorView(v)}
-                  className="px-2 py-1"
-                  style={{
-                    background: inspectorView === v ? c.accent : "transparent",
-                    color: inspectorView === v ? "#fff" : c.inkSoft,
-                  }}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {inspectorView === "Simple" ? (
-            <p className="text-[12px] leading-relaxed" style={{ color: c.inkSoft }}>
-              Checked {RETRIEVAL.initialCandidates} passages across your library and kept the{" "}
-              {RETRIEVAL.finalContext} most relevant to answer this question.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              <div>
-                <div className="text-[10.5px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>
-                  Retrieved documents
-                </div>
-                <div className="space-y-1.5">
-                  {RETRIEVAL.candidates.map((cand) => (
-                    <div key={cand.doc} className="flex items-center justify-between gap-2">
-                      <span className="text-[11.5px] truncate" style={{ color: c.inkSoft }}>{cand.doc}</span>
-                      <span className="text-[11px] tabular-nums shrink-0" style={{ color: c.inkFaint }}>{cand.score.toFixed(2)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center justify-between text-[11.5px]" style={{ color: c.inkSoft }}>
-                <span>Initial candidates</span>
-                <span className="tabular-nums">{RETRIEVAL.initialCandidates}</span>
-              </div>
-              <div className="flex items-center justify-between text-[11.5px]" style={{ color: c.inkSoft }}>
-                <span>Final context</span>
-                <span className="tabular-nums">{RETRIEVAL.finalContext}</span>
-              </div>
-              <div>
-                <div className="text-[10.5px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>Context chunks</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {RETRIEVAL.chunks.map((ch) => (
-                    <span key={ch} className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ background: c.panelAlt, color: c.inkSoft }}>
-                      {ch}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
+      {/* No sources yet */}
+      {sources.length === 0 && (
+        <div
+          className="p-4 text-[12.5px]"
+          style={{ color: c.inkFaint }}
+        >
+          Ask a question to view retrieved sources.
         </div>
       )}
+
+      {/* Real RAG sources */}
+      <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+        {sources.map((source, index) => {
+          const number = index + 1;
+
+          const fileName =
+            source.metadata?.source
+              ?.split("\\")
+              .pop() || "Document";
+
+          const page =
+            source.metadata?.page_label ||
+            (source.metadata?.page !== undefined
+              ? source.metadata.page + 1
+              : "?");
+
+          return (
+            <button
+              key={index}
+              onClick={() => setActiveCitation(number)}
+              className="w-full text-left rounded-sm border p-3"
+              style={{
+                borderColor:
+                  activeCitation === number
+                    ? c.accent
+                    : c.rule,
+
+                background:
+                  activeCitation === number
+                    ? c.accentSoft
+                    : "transparent",
+              }}
+            >
+              {/* Source number */}
+              <div className="flex items-center justify-between mb-2">
+                <span
+                  className="text-[11px] w-5 h-5 rounded-full flex items-center justify-center"
+                  style={{
+                    background: c.citationBg,
+                    color: c.citation,
+                  }}
+                >
+                  {number}
+                </span>
+
+                <span
+                  className="text-[10.5px]"
+                  style={{ color: c.inkFaint }}
+                >
+                  FAISS distance {source.score?.toFixed(3)}
+                </span>
+              </div>
+
+              {/* Document */}
+              <div
+                className="text-[13px] mb-1"
+                style={{ color: c.ink }}
+              >
+                {fileName}
+              </div>
+
+              {/* Page */}
+              <div
+                className="text-[11px] mb-2"
+                style={{ color: c.inkFaint }}
+              >
+                Page {page}
+              </div>
+
+              {/* Retrieved passage */}
+              {activeCitation === number && (
+                <p
+                  className="text-[12.5px] leading-relaxed pt-2 border-t"
+                  style={{
+                    ...serif,
+                    color: c.inkSoft,
+                    borderColor: c.rule,
+                  }}
+                >
+                  {source.content}
+                </p>
+              )}
+            </button>
+          );
+        })}
+      </div>
     </aside>
   );
 }
@@ -687,29 +909,45 @@ function SourcesPanel({ c, activeCitation, setActiveCitation, showInspector, set
 function ResearchWorkspace({ c }) {
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [activeCitation, setActiveCitation] = useState(1);
-  const [showInspector, setShowInspector] = useState(false);
-  const [inspectorView, setInspectorView] = useState("Simple");
-  const [showDocs, setShowDocs] = useState(true);
 
-  const activeDoc = DOCS.find((d) => d.id === selectedDoc) || null;
+  // Stores the real response from FastAPI /ask
+  const [ragResult, setRagResult] = useState(null);
+
+  const activeDoc =
+    DOCS.find((d) => d.id === selectedDoc) || null;
 
   return (
     <div className="flex-1 flex overflow-hidden">
+
+      {/* Left Documents Panel */}
       <div className="hidden md:block">
-        <DocumentsSidebar c={c} selected={selectedDoc} setSelected={setSelectedDoc} collapsed={false} />
+        <DocumentsSidebar
+          c={c}
+          selected={selectedDoc}
+          setSelected={setSelectedDoc}
+          collapsed={false}
+        />
       </div>
-      <ResearchPanel c={c} onCite={setActiveCitation} activeDoc={activeDoc} />
+
+      {/* Center Research Panel */}
+      <ResearchPanel
+        c={c}
+        onCite={setActiveCitation}
+        activeDoc={activeDoc}
+        ragResult={ragResult}
+        setRagResult={setRagResult}
+      />
+
+      {/* Right Real Sources Panel */}
       <div className="hidden lg:block">
         <SourcesPanel
           c={c}
+          sources={ragResult?.sources || []}
           activeCitation={activeCitation}
           setActiveCitation={setActiveCitation}
-          showInspector={showInspector}
-          setShowInspector={setShowInspector}
-          inspectorView={inspectorView}
-          setInspectorView={setInspectorView}
         />
       </div>
+
     </div>
   );
 }
@@ -719,45 +957,221 @@ function ResearchWorkspace({ c }) {
 ———————————————————————————————————————————————————————————————— */
 
 function DocumentsPage({ c }) {
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load real documents from FastAPI
+  useEffect(() => {
+    const loadDocuments = async () => {
+      try {
+        const response = await fetch(
+          "http://127.0.0.1:8000/documents"
+        );
+
+        const data = await response.json();
+
+        setDocuments(data.documents || []);
+      } catch (error) {
+        console.error("Failed to load documents:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadDocuments();
+  }, []);
+
+  // Convert bytes into readable file size
+  const formatSize = (bytes) => {
+    if (bytes < 1024) return `${bytes} B`;
+
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   return (
-    <div className="flex-1 overflow-y-auto p-8" style={{ background: c.bg }}>
+    <div
+      className="flex-1 overflow-y-auto p-8"
+      style={{ background: c.bg }}
+    >
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-[24px] mb-1" style={{ ...serif, color: c.ink }}>Research Library</h1>
-        <p className="text-[13.5px] mb-6" style={{ color: c.inkSoft }}>
-          {DOCS.length} documents indexed and ready to query.
+
+        <h1
+          className="text-[24px] mb-1"
+          style={{ ...serif, color: c.ink }}
+        >
+          Research Library
+        </h1>
+
+        <p
+          className="text-[13.5px] mb-6"
+          style={{ color: c.inkSoft }}
+        >
+          {loading
+            ? "Loading documents..."
+            : `${documents.length} documents indexed and ready to query.`}
         </p>
+
+
+        {/* Upload Area */}
 
         <div
           className="rounded-md border-2 border-dashed p-8 text-center mb-8"
-          style={{ borderColor: c.ruleStrong, background: c.panel }}
+          style={{
+            borderColor: c.ruleStrong,
+            background: c.panel,
+          }}
         >
-          <Upload size={20} className="mx-auto mb-3" style={{ color: c.inkFaint }} />
-          <p className="text-[14px] mb-1" style={{ color: c.ink }}>Drop your documents here</p>
-          <p className="text-[12.5px] mb-3" style={{ color: c.inkFaint }}>or browse files</p>
-          <button
-            className="text-[12.5px] px-3.5 py-1.5 rounded-sm border"
-            style={{ borderColor: c.ruleStrong, color: c.ink }}
+          <Upload
+            size={20}
+            className="mx-auto mb-3"
+            style={{ color: c.inkFaint }}
+          />
+
+          <p
+            className="text-[14px] mb-1"
+            style={{ color: c.ink }}
+          >
+            Upload your research documents
+          </p>
+
+          <p
+            className="text-[12.5px] mb-3"
+            style={{ color: c.inkFaint }}
+          >
+            Select a PDF to add it to your knowledge base
+          </p>
+
+          <label
+            className="inline-block text-[12.5px] px-3.5 py-1.5 rounded-sm border cursor-pointer"
+            style={{
+              borderColor: c.ruleStrong,
+              color: c.ink,
+            }}
           >
             Browse files
-          </button>
-          <p className="text-[11px] mt-3" style={{ color: c.inkFaint }}>PDF · DOCX · TXT · MD</p>
+
+            <input
+              type="file"
+              accept=".pdf"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files[0];
+
+                if (!file) return;
+
+                const formData = new FormData();
+                formData.append("file", file);
+
+                try {
+                  const response = await fetch(
+                    "http://127.0.0.1:8000/upload",
+                    {
+                      method: "POST",
+                      body: formData,
+                    }
+                  );
+
+                  const data = await response.json();
+
+                  if (!response.ok) {
+                    throw new Error(
+                      data.detail || "Upload failed"
+                    );
+                  }
+
+                  // Refresh real document list
+                  const docsResponse = await fetch(
+                    "http://127.0.0.1:8000/documents"
+                  );
+
+                  const docsData =
+                    await docsResponse.json();
+
+                  setDocuments(
+                    docsData.documents || []
+                  );
+
+                  alert(
+                    `${data.filename} uploaded and indexed successfully!`
+                  );
+
+                } catch (error) {
+                  console.error(error);
+                  alert("Document upload failed.");
+                }
+
+                e.target.value = "";
+              }}
+            />
+          </label>
+
+          <p
+            className="text-[11px] mt-3"
+            style={{ color: c.inkFaint }}
+          >
+            PDF
+          </p>
         </div>
 
+
+        {/* Documents */}
+
         <div className="grid sm:grid-cols-2 gap-3">
-          {DOCS.map((d) => (
-            <div key={d.id} className="rounded-sm border p-4" style={{ borderColor: c.rule, background: c.panel }}>
+
+          {documents.map((d) => (
+            <div
+              key={d.name}
+              className="rounded-sm border p-4"
+              style={{
+                borderColor: c.rule,
+                background: c.panel,
+              }}
+            >
               <div className="flex items-start gap-3">
-                <FileText size={16} className="mt-0.5" style={{ color: c.inkFaint }} />
+
+                <FileText
+                  size={16}
+                  className="mt-0.5"
+                  style={{ color: c.inkFaint }}
+                />
+
                 <div className="min-w-0">
-                  <div className="text-[13.5px] leading-snug" style={{ color: c.ink }}>{d.name}</div>
-                  <div className="text-[11.5px] mt-1" style={{ color: c.inkFaint }}>
-                    {d.type} · {d.date} · {d.pages} pages
+
+                  <div
+                    className="text-[13.5px] leading-snug truncate"
+                    style={{ color: c.ink }}
+                  >
+                    {d.name}
                   </div>
+
+                  <div
+                    className="text-[11.5px] mt-1"
+                    style={{ color: c.inkFaint }}
+                  >
+                    {d.type} · {formatSize(d.size)}
+                  </div>
+
                 </div>
               </div>
             </div>
           ))}
+
         </div>
+
+
+        {!loading && documents.length === 0 && (
+          <div
+            className="text-center py-10 text-[13px]"
+            style={{ color: c.inkFaint }}
+          >
+            No documents uploaded yet.
+          </div>
+        )}
+
       </div>
     </div>
   );
@@ -806,57 +1220,64 @@ function NotesPage({ c }) {
 
 function EvaluationPage({ c }) {
   return (
-    <div className="flex-1 overflow-y-auto p-8" style={{ background: c.bg }}>
+    <div
+      className="flex-1 overflow-y-auto p-8"
+      style={{ background: c.bg }}
+    >
       <div className="max-w-3xl mx-auto">
-        <h1 className="text-[24px] mb-1" style={{ ...serif, color: c.ink }}>RAG Evaluation</h1>
-        <p className="text-[13.5px] mb-8" style={{ color: c.inkSoft }}>
-          How the retrieval and generation pipeline performs, measured continuously.
+
+        <h1
+          className="text-[24px] mb-1"
+          style={{ ...serif, color: c.ink }}
+        >
+          RAG Evaluation
+        </h1>
+
+        <p
+          className="text-[13.5px] mb-8"
+          style={{ color: c.inkSoft }}
+        >
+          Current retrieval and generation configuration.
         </p>
 
-        <div className="grid sm:grid-cols-2 gap-4 mb-10">
-          {EVAL_METRICS.map((m) => (
-            <div key={m.label} className="rounded-sm border p-4" style={{ borderColor: c.rule, background: c.panel }}>
-              <div className="text-[12px] mb-2" style={{ color: c.inkFaint }}>{m.label}</div>
-              <div className="text-[26px] mb-2 tabular-nums" style={{ ...serif, color: c.ink }}>
-                {m.value.toFixed(2)}
+        <div className="grid sm:grid-cols-2 gap-4">
+
+          {[
+            ["Vector Store", "FAISS"],
+            ["Embedding Model", "all-MiniLM-L6-v2"],
+            ["Embedding Dimensions", "384"],
+            ["Top-K Retrieval", "3"],
+            ["Chunk Size", "1000"],
+            ["Chunk Overlap", "200"],
+            ["LLM", "Claude Sonnet 4.5"],
+            ["Citations", "Enabled"],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="rounded-sm border p-4"
+              style={{
+                borderColor: c.rule,
+                background: c.panel,
+              }}
+            >
+              <div
+                className="text-[12px] mb-2"
+                style={{ color: c.inkFaint }}
+              >
+                {label}
               </div>
-              <ScoreBar value={m.value} c={c} />
+
+              <div
+                className="text-[18px]"
+                style={{ ...serif, color: c.ink }}
+              >
+                {value}
+              </div>
             </div>
           ))}
-          <div className="rounded-sm border p-4" style={{ borderColor: c.rule, background: c.panel }}>
-            <div className="text-[12px] mb-2" style={{ color: c.inkFaint }}>Average Latency</div>
-            <div className="text-[26px] tabular-nums" style={{ ...serif, color: c.ink }}>1.42s</div>
-          </div>
+
         </div>
 
-        <h2 className="text-[15px] mb-3" style={{ ...serif, color: c.ink }}>FAISS vs ChromaDB</h2>
-        <div className="rounded-sm border overflow-hidden" style={{ borderColor: c.rule }}>
-          <table className="w-full text-[13px]" style={{ color: c.ink }}>
-            <thead>
-              <tr style={{ background: c.panelAlt }}>
-                <th className="text-left font-normal px-3.5 py-2.5" style={{ color: c.inkFaint }}></th>
-                <th className="text-left font-normal px-3.5 py-2.5" style={{ color: c.inkFaint }}>FAISS</th>
-                <th className="text-left font-normal px-3.5 py-2.5" style={{ color: c.inkFaint }}>ChromaDB</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ["Query latency", "24 ms", "31 ms"],
-                ["Top-K retrieval", "Exact / approximate", "Approximate"],
-                ["Persistence", "Manual", "Built-in"],
-                ["Ease of use", "Library-level", "Server + client"],
-              ].map((row, i) => (
-                <tr key={row[0]} style={{ borderTop: `1px solid ${c.rule}` }}>
-                  {row.map((cell, j) => (
-                    <td key={j} className="px-3.5 py-2.5" style={{ color: j === 0 ? c.inkSoft : c.ink }}>
-                      {cell}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   );
@@ -894,46 +1315,75 @@ function Toggle({ on, onClick, c }) {
 }
 
 function SettingsPage({ c, isDark, toggleDark }) {
-  const [rerank, setRerank] = useState(true);
   const [debug, setDebug] = useState(false);
+
   return (
     <div className="flex-1 overflow-y-auto p-8" style={{ background: c.bg }}>
       <div className="max-w-xl mx-auto">
-        <h1 className="text-[24px] mb-8" style={{ ...serif, color: c.ink }}>Settings</h1>
+        <h1 className="text-[24px] mb-8" style={{ ...serif, color: c.ink }}>
+          Settings
+        </h1>
 
         <div className="mb-8">
-          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>General</h2>
+          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>
+            General
+          </h2>
+
           <SettingRow label="Dark mode" hint="Switch the interface theme" c={c}>
             <Toggle on={isDark} onClick={toggleDark} c={c} />
           </SettingRow>
         </div>
 
         <div className="mb-8">
-          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>Retrieval</h2>
-          <SettingRow label="Top K" hint="Passages considered per query" c={c}>
-            <span className="text-[13px] tabular-nums" style={{ color: c.inkSoft }}>10</span>
+          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>
+            Retrieval
+          </h2>
+
+          <SettingRow label="Top K" hint="Passages retrieved per query" c={c}>
+            <span className="text-[13px]" style={{ color: c.inkSoft }}>3</span>
           </SettingRow>
-          <SettingRow label="Chunk size" hint="Tokens per indexed passage" c={c}>
-            <span className="text-[13px] tabular-nums" style={{ color: c.inkSoft }}>512</span>
+
+          <SettingRow label="Chunk size" c={c}>
+            <span className="text-[13px]" style={{ color: c.inkSoft }}>1000</span>
           </SettingRow>
-          <SettingRow label="Reranking" hint="Reorder candidates before generation" c={c}>
-            <Toggle on={rerank} onClick={() => setRerank((v) => !v)} c={c} />
+
+          <SettingRow label="Chunk overlap" c={c}>
+            <span className="text-[13px]" style={{ color: c.inkSoft }}>200</span>
           </SettingRow>
         </div>
 
         <div className="mb-8">
-          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>Knowledge Base</h2>
+          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>
+            Knowledge Base
+          </h2>
+
           <SettingRow label="Vector database" c={c}>
             <span className="text-[13px]" style={{ color: c.inkSoft }}>FAISS</span>
           </SettingRow>
+
           <SettingRow label="Embedding model" c={c}>
-            <span className="text-[13px]" style={{ color: c.inkSoft }}>text-embedding-3</span>
+            <span className="text-[13px]" style={{ color: c.inkSoft }}>
+              all-MiniLM-L6-v2
+            </span>
+          </SettingRow>
+
+          <SettingRow label="Embedding dimensions" c={c}>
+            <span className="text-[13px]" style={{ color: c.inkSoft }}>384</span>
+          </SettingRow>
+
+          <SettingRow label="LLM" c={c}>
+            <span className="text-[13px]" style={{ color: c.inkSoft }}>
+              Claude Sonnet 4.5
+            </span>
           </SettingRow>
         </div>
 
         <div>
-          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>Advanced</h2>
-          <SettingRow label="Retrieval debugging" hint="Show the inspector by default" c={c}>
+          <h2 className="text-[11px] uppercase tracking-wide mb-1" style={{ color: c.inkFaint }}>
+            Advanced
+          </h2>
+
+          <SettingRow label="Retrieval debugging" c={c}>
             <Toggle on={debug} onClick={() => setDebug((v) => !v)} c={c} />
           </SettingRow>
         </div>
@@ -1006,6 +1456,10 @@ export default function App() {
           >
             R
           </div>
+
+
+
+
         </div>
       </header>
 
